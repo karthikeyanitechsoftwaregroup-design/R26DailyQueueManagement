@@ -8,36 +8,42 @@ using System.Net;
 using System.Net.Mail;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 
 namespace R26_DailyQueueWinForm.Forms
 {
-    // ============================================================
-    // MAIN FORM CLASS
-    // ============================================================
+    [ComVisible(true)]
     public partial class SamsDeliveryReportForm : Form
     {
         private WebBrowser webBrowser;
         private MenuStrip mainMenuStrip;
-        private ToolStripMenuItem menuItemDeliveryReport;
+        private ToolStripMenuItem menuItemMain;
         private ToolStripMenuItem menuItemR26Queue;
-        private ToolStripMenuItem menuItemExit;
+        private ToolStripMenuItem menuItemDeliveryReport;
         private Button btnSendEmail;
         private Button btnRefresh;
+        private Panel pnlOneDriveCounts;
+        private Label lblCountTotal;
+        private Label lblCountCompleted;
+        private Label lblCountPending;
 
         private DateTime _targetDate;
         private EmailConfiguration _emailConfig;
         private string _connectionString;
         private string _storedProcedureName;
         private string _cachedHtmlContent;
+        private string _currentSortOrder = "none";
+        private System.Windows.Forms.Timer _countUpdateTimer;
 
-        // ✅ FIXED: Declare _r26Form field (was missing, causing CS0103 errors)
         private R26QueueForm _r26Form;
-
-        // ✅ FIXED: Added _r26QueueForm field for menu navigation
         private R26QueueForm _r26QueueForm;
 
         private SamsDeliveryDatabaseService _databaseService;
         private SamsDeliveryEmailService _emailService;
+
+        // NEW: Flag to prevent re-entry into exit confirmation
+        private bool _isExiting = false;
 
         public SamsDeliveryReportForm(
             DateTime targetDate,
@@ -50,17 +56,19 @@ namespace R26_DailyQueueWinForm.Forms
             _emailConfig = emailConfig;
             _connectionString = connectionString;
             _storedProcedureName = storedProcedureName;
-            _r26Form = r26Form; // ✅ FIXED: Now this field exists
-            _r26QueueForm = r26Form; // ✅ FIXED: Initialize both references
+            _r26Form = r26Form;
+            _r26QueueForm = r26Form;
 
-            // Initialize services
             _databaseService = new SamsDeliveryDatabaseService(_connectionString, _storedProcedureName);
             _emailService = new SamsDeliveryEmailService(_emailConfig);
+
+            _countUpdateTimer = new System.Windows.Forms.Timer();
+            _countUpdateTimer.Interval = 2000;
+            //_countUpdateTimer.Tick += CountUpdateTimer_Tick;
 
             InitializeComponent();
             LoadReportFromDatabase();
 
-            // ✅ FIXED: Add FormClosing event handler
             this.FormClosing += SamsDeliveryReportForm_FormClosing;
         }
 
@@ -71,44 +79,93 @@ namespace R26_DailyQueueWinForm.Forms
             this.StartPosition = FormStartPosition.CenterScreen;
             this.WindowState = FormWindowState.Maximized;
 
-            // Menu Strip
             mainMenuStrip = new MenuStrip
             {
-                Dock = DockStyle.None,
+                Dock = DockStyle.Top,
                 Font = new Font("Segoe UI", 10F),
-                GripStyle = ToolStripGripStyle.Hidden,
-                RenderMode = ToolStripRenderMode.Professional,
+                BackColor = Color.White,
+                Height = 35,
                 Padding = new Padding(10, 5, 0, 5)
             };
 
-            menuItemDeliveryReport = new ToolStripMenuItem("Sam's Delivery Report Status")
+            menuItemMain = new ToolStripMenuItem("Menu")
             {
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold)
+                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                ForeColor = Color.Black
             };
 
             menuItemR26Queue = new ToolStripMenuItem("R26 Daily Queue Management");
             menuItemR26Queue.Click += MenuItemR26Queue_Click;
 
-            menuItemExit = new ToolStripMenuItem("Exit");
-            menuItemExit.Click += (s, e) => Application.Exit();
+            menuItemDeliveryReport = new ToolStripMenuItem("Sam's Delivery Report Status")
+            {
+                Checked = true
+            };
 
-            mainMenuStrip.Items.Add(menuItemDeliveryReport);
-            mainMenuStrip.Items.Add(menuItemR26Queue);
-            mainMenuStrip.Items.Add(menuItemExit);
-            mainMenuStrip.Location = new Point(0, 5);
+            var menuItemSample1 = new ToolStripMenuItem("Sample 1");
+            menuItemSample1.Click += MenuItemSample1_Click;
+
+            var menuItemSample2 = new ToolStripMenuItem("Sample 2");
+            menuItemSample2.Click += MenuItemSample2_Click;
+
+            menuItemMain.DropDownItems.Add(menuItemR26Queue);
+            menuItemMain.DropDownItems.Add(menuItemDeliveryReport);
+            menuItemMain.DropDownItems.Add(new ToolStripSeparator()); 
+            menuItemMain.DropDownItems.Add(menuItemSample1);
+            menuItemMain.DropDownItems.Add(menuItemSample2);
+
+            mainMenuStrip.Items.Add(menuItemMain);
             this.MainMenuStrip = mainMenuStrip;
 
-            // Title Label
             Label lblTitle = new Label
             {
                 Text = $"Sam's Delivery Report Status - {_targetDate:MMMM dd, yyyy}",
                 Font = new Font("Segoe UI", 14F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(0, 120, 212),
-                Location = new Point(20, 40),
+                Location = new Point(20, 45),
                 AutoSize = true
             };
 
-            // Refresh Button
+            pnlOneDriveCounts = new Panel
+            {
+                Location = new Point(730, 45),
+                Size = new Size(400, 30),
+                BackColor = Color.White,
+                Visible = false,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+
+            lblCountTotal = new Label
+            {
+                AutoSize = true,
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                ForeColor = Color.Black,
+                Location = new Point(0, 5),
+                Text = "Total: 0"
+            };
+
+            lblCountCompleted = new Label
+            {
+                AutoSize = true,
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                ForeColor = Color.Green,
+                Location = new Point(100, 5),
+                Text = "Completed: 0"
+            };
+
+            lblCountPending = new Label
+            {
+                AutoSize = true,
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                ForeColor = Color.Red,
+                Location = new Point(250, 5),
+                Text = "Pending: 0"
+            };
+
+            pnlOneDriveCounts.Controls.Add(lblCountTotal);
+            pnlOneDriveCounts.Controls.Add(lblCountCompleted);
+            pnlOneDriveCounts.Controls.Add(lblCountPending);
+
             btnRefresh = new Button
             {
                 Text = "Refresh Report",
@@ -123,7 +180,6 @@ namespace R26_DailyQueueWinForm.Forms
             btnRefresh.FlatAppearance.BorderSize = 0;
             btnRefresh.Click += BtnRefresh_Click;
 
-            // Send Email Button
             btnSendEmail = new Button
             {
                 Text = "Send Email",
@@ -138,31 +194,28 @@ namespace R26_DailyQueueWinForm.Forms
             btnSendEmail.FlatAppearance.BorderSize = 0;
             btnSendEmail.Click += BtnSendEmail_Click;
 
-            // Web Browser
             webBrowser = new WebBrowser
             {
-                Location = new Point(0, 80),
-                Size = new Size(this.ClientSize.Width, this.ClientSize.Height - 80),
+                Location = new Point(0, 85),
+                Size = new Size(this.ClientSize.Width, this.ClientSize.Height - 85),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
                 ScriptErrorsSuppressed = true
             };
 
+            webBrowser.DocumentCompleted += WebBrowser_DocumentCompleted;
+            webBrowser.ObjectForScripting = this;
+
             this.Controls.Add(mainMenuStrip);
             this.Controls.Add(lblTitle);
+            this.Controls.Add(pnlOneDriveCounts);
             this.Controls.Add(btnRefresh);
             this.Controls.Add(btnSendEmail);
             this.Controls.Add(webBrowser);
 
-            this.Resize += (s, e) =>
-            {
-                CenterMenuStrip();
-                PositionButtons();
-            };
-            this.Shown += (s, e) =>
-            {
-                CenterMenuStrip();
-                PositionButtons();
-            };
+            pnlOneDriveCounts.BringToFront();
+
+            this.Resize += (s, e) => PositionButtons();
+            this.Shown += (s, e) => PositionButtons();
         }
 
         private void PositionButtons()
@@ -171,21 +224,295 @@ namespace R26_DailyQueueWinForm.Forms
             {
                 btnSendEmail.Location = new Point(
                     this.ClientSize.Width - btnSendEmail.Width - 20,
-                    10
+                    40
                 );
                 btnRefresh.Location = new Point(
                     btnSendEmail.Location.X - btnRefresh.Width - 10,
-                    10
+                    40
                 );
             }
         }
 
-        private void CenterMenuStrip()
+        //private void CountUpdateTimer_Tick(object sender, EventArgs e)
+        //{
+        //    if (webBrowser.Document != null && webBrowser.ReadyState == WebBrowserReadyState.Complete)
+        //    {
+        //        UpdateOneDriveLinkCounts();
+        //    }
+        //}
+
+        private void WebBrowser_DocumentCompleted(object sender, WebBrowserDocumentCompletedEventArgs e)
         {
-            if (mainMenuStrip != null)
+            if (webBrowser.Document != null)
             {
-                int x = (this.ClientSize.Width - mainMenuStrip.Width) / 2;
-                mainMenuStrip.Location = new Point(x, 5);
+                UpdateOneDriveLinkCounts();
+                _countUpdateTimer.Start();
+
+                try
+                {
+                    HtmlElementCollection tables = webBrowser.Document.GetElementsByTagName("table");
+
+                    foreach (HtmlElement table in tables)
+                    {
+                        HtmlElementCollection headers = table.GetElementsByTagName("th");
+                        foreach (HtmlElement header in headers)
+                        {
+                            if (header.InnerText != null && header.InnerText.Trim().Contains("OneDrive Link"))
+                            {
+                                header.Style = "cursor: pointer; user-select: none;";
+                                header.Click -= OneDriveLinkHeader_Click;
+                                header.Click += OneDriveLinkHeader_Click;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // Silently handle errors
+                }
+            }
+        }
+
+
+        private void OneDriveLinkHeader_Click(object sender, HtmlElementEventArgs e)
+        {
+            SortOneDriveLinks();
+        }
+
+        public void OneDriveLinkHeaderClicked()
+        {
+            SortOneDriveLinks();
+        }
+
+        private void SortOneDriveLinks()
+        {
+            if (webBrowser.Document == null) return;
+
+            try
+            {
+                // Toggle between original order and sorted (no-links first)
+                if (_currentSortOrder == "none")
+                    _currentSortOrder = "sorted"; // No-links first
+                else
+                    _currentSortOrder = "none"; // Original order (links already first from SP)
+
+                HtmlElementCollection tables = webBrowser.Document.GetElementsByTagName("table");
+                HtmlElement targetTable = null;
+
+                foreach (HtmlElement table in tables)
+                {
+                    HtmlElementCollection headers = table.GetElementsByTagName("th");
+                    foreach (HtmlElement header in headers)
+                    {
+                        if (header.InnerText != null && header.InnerText.Contains("OneDrive Link"))
+                        {
+                            targetTable = table;
+                            break;
+                        }
+                    }
+                    if (targetTable != null) break;
+                }
+
+                if (targetTable == null) return;
+
+                HtmlElementCollection tbody = targetTable.GetElementsByTagName("tbody");
+                if (tbody.Count == 0) return;
+
+                HtmlElement tableBody = tbody[0];
+                HtmlElementCollection rows = tableBody.GetElementsByTagName("tr");
+
+                if (rows.Count <= 1) return;
+
+                var rowDataList = new System.Collections.Generic.List<RowData>();
+
+                foreach (HtmlElement row in rows)
+                {
+                    HtmlElementCollection cells = row.GetElementsByTagName("td");
+                    if (cells.Count >= 4)
+                    {
+                        string oneDriveLinkHtml = cells[3].InnerHtml ?? "";
+                        bool hasLink = oneDriveLinkHtml.Contains("<a") || oneDriveLinkHtml.Contains("📂");
+
+                        rowDataList.Add(new RowData
+                        {
+                            RowHtml = row.OuterHtml,
+                            HasLink = hasLink
+                        });
+                    }
+                }
+
+                // Sort only when in "sorted" mode - rows WITHOUT links appear first
+                if (_currentSortOrder == "sorted")
+                {
+                    rowDataList = rowDataList.OrderBy(r => r.HasLink).ToList(); // false (no link) comes first
+                }
+                // When _currentSortOrder is "none", keep original order (links already first from SP)
+
+                // ✅ FIX: Reorder rows without losing any data
+                // This rebuilds the table with ALL existing rows, just in a different order
+                string newTableBodyHtml = "";
+                foreach (var rowData in rowDataList)
+                {
+                    newTableBodyHtml += rowData.RowHtml; // Keeps ALL row data intact
+                }
+
+                tableBody.InnerHtml = newTableBodyHtml; // Replace with reordered rows
+
+                // Update header with sort indicator
+                HtmlElementCollection tableHeaders = targetTable.GetElementsByTagName("th");
+                foreach (HtmlElement header in tableHeaders)
+                {
+                    if (header.InnerText != null && header.InnerText.Contains("OneDrive Link"))
+                    {
+                        // No indicator needed - user can see the order change
+                        string headerText = "OneDrive Link";
+                        header.InnerText = headerText;
+                    }
+                }
+
+                // ✅ Re-attach click handlers after sorting (they get lost when InnerHtml is replaced)
+                HtmlElementCollection newRows = tableBody.GetElementsByTagName("tr");
+                foreach (HtmlElement row in newRows)
+                {
+                    HtmlElementCollection cells = row.GetElementsByTagName("td");
+                    if (cells.Count >= 4)
+                    {
+                        // Optional: You can add click handlers to cells here if needed
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error sorting OneDrive links: {ex.Message}",
+                    "Sort Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void MenuItemSample1_Click(object sender, EventArgs e)
+        {
+            MessageBox.Show(
+                "Sample 1 menu item clicked!\n\nYou can implement your custom functionality here.",
+                "Sample 1",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        private void MenuItemSample2_Click(object sender, EventArgs e)
+        {
+            MessageBox.Show(
+                "Sample 2 menu item clicked!\n\nYou can implement your custom functionality here.",
+                "Sample 2",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        private void UpdateOneDriveLinkCounts()
+        {
+            if (webBrowser.Document == null)
+            {
+                pnlOneDriveCounts.Visible = false;
+                return;
+            }
+
+            try
+            {
+                int totalCount = 0;
+                int completedCount = 0;
+                int pendingCount = 0;
+
+                HtmlElementCollection tables = webBrowser.Document.GetElementsByTagName("table");
+                HtmlElement targetTable = null;
+                int oneDriveLinkColumnIndex = -1;
+
+                foreach (HtmlElement table in tables)
+                {
+                    HtmlElementCollection tableHeaders = table.GetElementsByTagName("th");
+                    for (int i = 0; i < tableHeaders.Count; i++)
+                    {
+                        HtmlElement header = tableHeaders[i];
+                        if (header.InnerText != null && header.InnerText.Contains("OneDrive Link"))
+                        {
+                            targetTable = table;
+                            oneDriveLinkColumnIndex = i;
+                            break;
+                        }
+                    }
+                    if (targetTable != null) break;
+                }
+
+                if (targetTable != null && oneDriveLinkColumnIndex >= 0)
+                {
+                    HtmlElementCollection tbody = targetTable.GetElementsByTagName("tbody");
+                    if (tbody.Count > 0)
+                    {
+                        HtmlElementCollection rows = tbody[0].GetElementsByTagName("tr");
+
+                        foreach (HtmlElement row in rows)
+                        {
+                            HtmlElementCollection cells = row.GetElementsByTagName("td");
+
+                            if (cells.Count == 0)
+                                continue;
+
+                            totalCount++;
+
+                            if (cells.Count > oneDriveLinkColumnIndex)
+                            {
+                                HtmlElement cell = cells[oneDriveLinkColumnIndex];
+                                string cellContent = cell.InnerHtml ?? "";
+                                string cellText = cell.InnerText ?? "";
+
+                                bool hasLink = cellContent.Contains("href=") ||
+                                              cellContent.Contains("<a ") ||
+                                              cellContent.Contains("<a>") ||
+                                              cellContent.Contains("📂") ||
+                                              (cellText.Contains("📂"));
+
+                                if (hasLink)
+                                {
+                                    completedCount++;
+                                }
+                                else if (cellText.Trim() == "-" || string.IsNullOrWhiteSpace(cellText))
+                                {
+                                    pendingCount++;
+                                }
+                                else
+                                {
+                                    if (!string.IsNullOrWhiteSpace(cellText) && cellText.Trim() != "-")
+                                    {
+                                        completedCount++;
+                                    }
+                                    else
+                                    {
+                                        pendingCount++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    lblCountTotal.Text = $"Total: {totalCount}";
+                    lblCountCompleted.Text = $"| Completed: {completedCount}";
+                    lblCountPending.Text = $"| Pending: {pendingCount}";
+
+                    lblCountTotal.Location = new Point(5, 5);
+                    lblCountCompleted.Location = new Point(lblCountTotal.Right + 10, 5);
+                    lblCountPending.Location = new Point(lblCountCompleted.Right + 10, 5);
+
+                    pnlOneDriveCounts.Size = new Size(lblCountPending.Right + 10, 30);
+
+                    pnlOneDriveCounts.Visible = true;
+                    pnlOneDriveCounts.BringToFront();
+                }
+                else
+                {
+                    pnlOneDriveCounts.Visible = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Count error: {ex.Message}");
+                pnlOneDriveCounts.Visible = false;
             }
         }
 
@@ -193,7 +520,6 @@ namespace R26_DailyQueueWinForm.Forms
         {
             try
             {
-                // Show loading message
                 webBrowser.DocumentText = @"
                     <html>
                         <body style='font-family: Segoe UI, Arial, sans-serif;'>
@@ -207,7 +533,6 @@ namespace R26_DailyQueueWinForm.Forms
                 btnSendEmail.Enabled = false;
                 btnRefresh.Enabled = false;
 
-                // Fetch HTML content from database
                 _cachedHtmlContent = await _databaseService.GetHtmlContentFromStoredProcedure(_targetDate);
 
                 if (!string.IsNullOrWhiteSpace(_cachedHtmlContent))
@@ -262,6 +587,8 @@ namespace R26_DailyQueueWinForm.Forms
 
         private void BtnRefresh_Click(object sender, EventArgs e)
         {
+            _currentSortOrder = "none";
+            _countUpdateTimer.Stop();
             LoadReportFromDatabase();
         }
 
@@ -269,7 +596,6 @@ namespace R26_DailyQueueWinForm.Forms
         {
             try
             {
-                // Validate HTML content
                 if (string.IsNullOrWhiteSpace(_cachedHtmlContent))
                 {
                     MessageBox.Show(
@@ -283,10 +609,8 @@ namespace R26_DailyQueueWinForm.Forms
                 btnSendEmail.Enabled = false;
                 btnSendEmail.Text = "Sending...";
 
-                // Prepare email details
                 string subject = $"Sam's Delivery Report Status - {_targetDate:MMMM dd, yyyy}";
 
-                // Get recipient emails from configuration
                 string[] toEmails = _emailConfig.ToMails
                     .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(email => email.Trim())
@@ -303,7 +627,6 @@ namespace R26_DailyQueueWinForm.Forms
                     return;
                 }
 
-                // Send email
                 bool success = await _emailService.SendEmailAsync(
                     toEmails,
                     subject,
@@ -339,12 +662,34 @@ namespace R26_DailyQueueWinForm.Forms
             }
         }
 
-        // ✅ FIXED: FormClosing handler with proper field references
         private void SamsDeliveryReportForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            // If this is the startup form (no R26 form exists) and user is closing
-            if (_r26Form == null && e.CloseReason == CloseReason.UserClosing)
+            // ✅ Stop and dispose timer
+            if (_countUpdateTimer != null)
             {
+                _countUpdateTimer.Stop();
+                _countUpdateTimer.Dispose();
+            }
+
+            // ✅ Check if already exiting to prevent re-entry
+            if (_isExiting)
+            {
+                return;
+            }
+
+            // ✅ If this is triggered by Application.Exit() from another form, don't show confirmation
+            if (e.CloseReason == CloseReason.ApplicationExitCall)
+            {
+                return;
+            }
+
+            // Only handle user closing (X button)
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                // ✅ Set flag BEFORE showing dialog to prevent re-entry
+                _isExiting = true;
+
+                // Always show exit confirmation when user clicks close button
                 var result = MessageBox.Show(
                     "Are you sure you want to exit the application?",
                     "Confirm Exit",
@@ -353,18 +698,31 @@ namespace R26_DailyQueueWinForm.Forms
 
                 if (result == DialogResult.Yes)
                 {
+                    // Close R26 form if it exists (without triggering their events)
+                    if (_r26Form != null && !_r26Form.IsDisposed)
+                    {
+                        // ✅ Set their exit flag to prevent their dialog
+                        _r26Form._isExiting = true;
+                        _r26Form.Close();
+                    }
+
+                    if (_r26QueueForm != null && !_r26QueueForm.IsDisposed && _r26QueueForm != _r26Form)
+                    {
+                        // ✅ Set their exit flag to prevent their dialog
+                        _r26QueueForm._isExiting = true;
+                        _r26QueueForm.Close();
+                    }
+
+                    // Exit the entire application
                     Application.Exit();
                 }
                 else
                 {
+                    // ✅ Reset flag if user cancels
+                    _isExiting = false;
+                    // Cancel the close operation
                     e.Cancel = true;
                 }
-            }
-            // If R26 form exists and user is closing, show R26 form
-            else if (_r26Form != null && !_r26Form.IsDisposed && e.CloseReason == CloseReason.UserClosing)
-            {
-                _r26Form.Show();
-                _r26Form.BringToFront();
             }
         }
 
@@ -381,7 +739,6 @@ namespace R26_DailyQueueWinForm.Forms
                 _r26QueueForm.FormClosed += (s, args) =>
                 {
                     _r26QueueForm = null;
-                    // ✅ Show Sam's form again when R26 form is closed
                     this.Show();
                     this.BringToFront();
                 };
@@ -396,11 +753,14 @@ namespace R26_DailyQueueWinForm.Forms
             this.BringToFront();
             this.Focus();
         }
+
+        private class RowData
+        {
+            public string RowHtml { get; set; }
+            public bool HasLink { get; set; }
+        }
     }
 
-    // ============================================================
-    // DATABASE SERVICE CLASS
-    // ============================================================
     internal class SamsDeliveryDatabaseService
     {
         private readonly string _connectionString;
@@ -420,14 +780,12 @@ namespace R26_DailyQueueWinForm.Forms
                 using (var command = new SqlCommand(_storedProcedureName, connection))
                 {
                     command.CommandType = CommandType.StoredProcedure;
-                    command.CommandTimeout = 300; // 5 minutes timeout
+                    command.CommandTimeout = 300;
 
-                    // Add parameter for target date
                     command.Parameters.AddWithValue("@TargetDate", targetDate);
 
                     await connection.OpenAsync();
 
-                    // Execute and get the HTML content
                     var result = await command.ExecuteScalarAsync();
                     return result?.ToString() ?? string.Empty;
                 }
@@ -439,9 +797,6 @@ namespace R26_DailyQueueWinForm.Forms
         }
     }
 
-    // ============================================================
-    // EMAIL SERVICE CLASS
-    // ============================================================
     internal class SamsDeliveryEmailService
     {
         private readonly EmailConfiguration _config;
@@ -463,7 +818,7 @@ namespace R26_DailyQueueWinForm.Forms
                         _config.SmtpSettings.UserName,
                         _config.SmtpSettings.Password
                     );
-                    client.Timeout = 30000; // 30 seconds
+                    client.Timeout = 30000;
 
                     using (var message = new MailMessage())
                     {
@@ -472,7 +827,6 @@ namespace R26_DailyQueueWinForm.Forms
                             _config.SmtpSettings.FromName
                         );
 
-                        // Add TO recipients
                         foreach (var email in toEmails)
                         {
                             if (!string.IsNullOrWhiteSpace(email))
@@ -481,7 +835,6 @@ namespace R26_DailyQueueWinForm.Forms
                             }
                         }
 
-                        // Add CC recipients if configured
                         if (!string.IsNullOrWhiteSpace(_config.ErrorNotifications.CcEmails))
                         {
                             var ccEmails = _config.ErrorNotifications.CcEmails.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);

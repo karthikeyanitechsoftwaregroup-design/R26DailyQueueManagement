@@ -41,6 +41,7 @@ namespace R26_DailyQueueWinForm.Data
                 using (SqlCommand cmd = new SqlCommand("GetAllR26DailyQueue", con))
                 {
                     cmd.CommandType = CommandType.StoredProcedure;
+                    cmd.CommandTimeout = 120; // Increase timeout for large datasets
 
                     con.Open();
 
@@ -84,7 +85,7 @@ namespace R26_DailyQueueWinForm.Data
             }
             catch (SqlException sqlEx)
             {
-                throw new Exception($"Database error while retrieving R26 queue: {sqlEx.Message}", sqlEx);
+                throw new Exception($"Database error while retrieving R26 queue: {sqlEx.Message}\nProcedure: sp_GetAllR26DailyQueue", sqlEx);
             }
             catch (Exception ex)
             {
@@ -150,72 +151,7 @@ namespace R26_DailyQueueWinForm.Data
             return statuses;
         }
 
-        public List<R26QueueModel> GetPagedR26Queue(int pageNumber, int pageSize, out int totalRecords)
-        {
-            var list = new List<R26QueueModel>();
-            totalRecords = 0;
-
-            using (SqlConnection con = new SqlConnection(_connectionString))
-            using (SqlCommand cmd = new SqlCommand("GetR26DailyQueuePaginated", con))
-            {
-                cmd.CommandType = CommandType.StoredProcedure;
-                cmd.Parameters.AddWithValue("@PageNumber", pageNumber);
-                cmd.Parameters.AddWithValue("@PageSize", pageSize);
-                cmd.CommandTimeout = 60;
-
-                con.Open();
-                using (SqlDataReader rdr = cmd.ExecuteReader())
-                {
-                    // Result Set 1: Total Count
-                    if (rdr.Read())
-                    {
-                        totalRecords = Convert.ToInt32(rdr["TotalRecords"]);
-                    }
-
-                    // Result Set 2: The Data
-                    if (rdr.NextResult())
-                    {
-                        while (rdr.Read())
-                        {
-                            string rawStatus = rdr["status"] == DBNull.Value ? "" : rdr["status"].ToString();
-
-                            list.Add(new R26QueueModel
-                            {
-                                R26QueueUid = (int)rdr["r26queueuid"],
-                                CompanyUid = (int)rdr["companyuid"],
-                                PatNumber = rdr["PatNumber"] == DBNull.Value ? null : (int?)rdr["PatNumber"],
-                                PatFName = rdr["PatFName"] == DBNull.Value ? null : rdr["PatFName"].ToString(),
-                                PatMInitial = rdr["PatMInitial"] == DBNull.Value ? null : rdr["PatMInitial"].ToString(),
-                                PatLName = rdr["PatLName"] == DBNull.Value ? null : rdr["PatLName"].ToString(),
-                                PatSex = rdr["PatSex"] == DBNull.Value ? null : rdr["PatSex"].ToString(),
-                                PatBirthdate = rdr["PatBirthdate"] == DBNull.Value ? null : (DateTime?)rdr["PatBirthdate"],
-                                LocationNumber = rdr["LocationNumber"] == DBNull.Value ? null : (int?)rdr["LocationNumber"],
-                                Date = rdr["Date"] == DBNull.Value ? null : (DateTime?)rdr["Date"],
-                                Time = rdr["Time"] == DBNull.Value ? null : (TimeSpan?)rdr["Time"],
-                                ApptType = rdr["ApptType"] == DBNull.Value ? null : rdr["ApptType"].ToString(),
-                                Reason = rdr["Reason"] == DBNull.Value ? null : rdr["Reason"].ToString(),
-                                PatAddress1 = rdr["PatAddress1"] == DBNull.Value ? null : rdr["PatAddress1"].ToString(),
-                                PatCity = rdr["PatCity"] == DBNull.Value ? null : rdr["PatCity"].ToString(),
-                                PatState = rdr["PatState"] == DBNull.Value ? null : rdr["PatState"].ToString(),
-                                PatZip5 = rdr["PatZip5"] == DBNull.Value ? null : rdr["PatZip5"].ToString(),
-                                HomePhone = rdr["HomePhone"] == DBNull.Value ? null : rdr["HomePhone"].ToString(),
-                                WorkPhone = rdr["WorkPhone"] == DBNull.Value ? null : rdr["WorkPhone"].ToString(),
-                                ResourceName = rdr["ResourceName"] == DBNull.Value ? null : rdr["ResourceName"].ToString(),
-                                ProviderName = rdr["ProviderName"] == DBNull.Value ? null : rdr["ProviderName"].ToString(),
-                                PrimaryInsuranceName = rdr["PrimaryInsuranceName"] == DBNull.Value ? null : rdr["PrimaryInsuranceName"].ToString(),
-                                BotName = rdr["botname"] == DBNull.Value ? null : rdr["botname"].ToString(),
-                                Status = string.IsNullOrWhiteSpace(rawStatus) ? "Pending" : rawStatus,
-                                CreatedDate = rdr["createdate"] == DBNull.Value ? null : (DateTime?)rdr["createdate"],
-                                ModifiedDate = rdr["modifieddate"] == DBNull.Value ? null : (DateTime?)rdr["modifieddate"]
-                            });
-                        }
-                    }
-                }
-            }
-            return list;
-        }
-
-        public int UpdateStatuses(Dictionary<int, string> updates)
+        public int UpdateStatuses(Dictionary<int, string> updates, string systemName)
         {
             int count = 0;
             using (SqlConnection con = new SqlConnection(_connectionString))
@@ -232,6 +168,7 @@ namespace R26_DailyQueueWinForm.Data
                                 cmd.CommandType = CommandType.StoredProcedure;
                                 cmd.Parameters.AddWithValue("@QueueId", item.Key);
                                 cmd.Parameters.AddWithValue("@Status", item.Value);
+                                cmd.Parameters.AddWithValue("@SystemName", systemName ?? "Unknown");
                                 count += cmd.ExecuteNonQuery();
                             }
                         }
@@ -246,5 +183,7 @@ namespace R26_DailyQueueWinForm.Data
             }
             return count;
         }
+
+
     }
 }

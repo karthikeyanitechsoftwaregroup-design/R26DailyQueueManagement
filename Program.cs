@@ -11,10 +11,9 @@ namespace R26_DailyQueueWinForm
 {
     static class Program
     {
-        // ✅ Global decrypted DB connection string
         public static string DbConnectionString { get; private set; }
 
-        // 🔐 Machine-level entropy (DO NOT CHANGE after release)
+        // Machine-level entropy
         private static readonly byte[] _entropy =
             Encoding.UTF8.GetBytes("R26_DailyQueue_SecureKey_v1");
 
@@ -26,16 +25,15 @@ namespace R26_DailyQueueWinForm
 
             try
             {
-                // 📄 Load configuration
+                // Load configuration
                 var configuration = new ConfigurationBuilder()
                     .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
                     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                     .Build();
 
-                // 🔓 Decrypt DB connection string
-                DbConnectionString = DecryptString(
-                    configuration["ConnectionStrings:DailyQueueConnection"]
-                );
+                // Decrypt DB connection string
+                string rawConnectionString = configuration["ConnectionStrings:DailyQueueConnection"];
+                DbConnectionString = TryDecryptOrUsePlain(rawConnectionString);
 
                 if (string.IsNullOrWhiteSpace(DbConnectionString))
                 {
@@ -47,7 +45,9 @@ namespace R26_DailyQueueWinForm
                     return;
                 }
 
-                // 📧 Email configuration
+                // Email configuration
+                string rawPassword = configuration["SmtpSettings:Password"];
+
                 var emailConfig = new EmailConfiguration
                 {
                     SmtpSettings = new SmtpSettings
@@ -56,7 +56,7 @@ namespace R26_DailyQueueWinForm
                         Port = int.Parse(configuration["SmtpSettings:Port"] ?? "587"),
                         EnableSsl = bool.Parse(configuration["SmtpSettings:EnableSsl"] ?? "true"),
                         UserName = configuration["SmtpSettings:UserName"],
-                        Password = DecryptString(configuration["SmtpSettings:Password"]),
+                        Password = TryDecryptOrUsePlain(rawPassword),
                         FromEmail = configuration["SmtpSettings:FromEmail"],
                         FromName = configuration["SmtpSettings:FromName"]
                                    ?? "Report Management System"
@@ -68,25 +68,16 @@ namespace R26_DailyQueueWinForm
                     }
                 };
 
+                // START WITH SAM'S DELIVERY REPORT FORM
                 Application.Run(
                     new SamsDeliveryReportForm(
-                        DateTime.Today,                              
-                        emailConfig,                                 
-                        DbConnectionString,                          
-                        "SDgetSAMSReportStatus",                    
-                        null                                         
+                        DateTime.Today,
+                        emailConfig,
+                        DbConnectionString,
+                        "SDgetSAMSReportStatus",
+                        null
                     )
                 );
-            }
-            catch (CryptographicException ex)
-            {
-                MessageBox.Show(
-                    "Failed to decrypt configuration values.\n\n" +
-                    "Re-encrypt values on this machine.\n\n" +
-                    ex.Message,
-                    "Decryption Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
             }
             catch (FileNotFoundException ex)
             {
@@ -106,32 +97,59 @@ namespace R26_DailyQueueWinForm
             }
         }
 
-        // 🔓 Decrypt (Machine-scoped)
+        // Try to decrypt
+        private static string TryDecryptOrUsePlain(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            if (value.Length > 100 && IsBase64String(value))
+            {
+                try
+                {
+                    return DecryptString(value);
+                }
+                catch
+                {
+                    // If decryption fails, treat as plain text
+                    return value;
+                }
+            }
+
+            // Return as plain text
+            return value;
+        }
+
+        // Helper to check if string is Base64
+        private static bool IsBase64String(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+                return false;
+
+            s = s.Trim();
+            return (s.Length % 4 == 0) &&
+                   System.Text.RegularExpressions.Regex.IsMatch(s, @"^[a-zA-Z0-9\+/]*={0,3}$",
+                   System.Text.RegularExpressions.RegexOptions.None);
+        }
+
+        // Decrypt (Machine-scoped)
         private static string DecryptString(string encryptedString)
         {
             if (string.IsNullOrWhiteSpace(encryptedString))
                 return string.Empty;
 
-            try
-            {
-                byte[] encryptedData = Convert.FromBase64String(encryptedString);
+            byte[] encryptedData = Convert.FromBase64String(encryptedString);
 
-                byte[] decryptedData = ProtectedData.Unprotect(
-                    encryptedData,
-                    _entropy,
-                    DataProtectionScope.LocalMachine
-                );
+            byte[] decryptedData = ProtectedData.Unprotect(
+                encryptedData,
+                _entropy,
+                DataProtectionScope.LocalMachine
+            );
 
-                return Encoding.UTF8.GetString(decryptedData);
-            }
-            catch
-            {
-                throw new CryptographicException(
-                    "Invalid encrypted value. Re-encryption is required.");
-            }
+            return Encoding.UTF8.GetString(decryptedData);
         }
 
-        // 🔐 Encrypt (Machine-scoped) — keep for future re-encryption tools
+        // Encrypt (Machine-scoped)
         public static string EncryptString(string plainText)
         {
             if (string.IsNullOrWhiteSpace(plainText))
