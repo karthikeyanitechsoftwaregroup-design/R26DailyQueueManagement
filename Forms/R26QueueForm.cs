@@ -1765,6 +1765,28 @@ namespace R26_DailyQueueWinForm
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
 
+                    // CLEAR ALL SELECTIONS BEFORE RELOAD
+                    foreach (DataGridViewRow row in dgvQueue.Rows)
+                    {
+                        if (row.Cells["Select"].Value != null)
+                        {
+                            row.Cells["Select"].Value = false;
+                        }
+                    }
+
+                    // Update the DataTable to reflect cleared selections
+                    if (_dataTable != null)
+                    {
+                        foreach (DataRow dataRow in _dataTable.Rows)
+                        {
+                            dataRow["Select"] = false;
+                        }
+                    }
+
+                    // Clear the selected records grid immediately
+                    UpdateSelectedRecordsGrid();
+
+                    // Now reload the data
                     _ = LoadQueueDataAsync(isInitialLoad: false);
                 }
                 catch (Exception ex)
