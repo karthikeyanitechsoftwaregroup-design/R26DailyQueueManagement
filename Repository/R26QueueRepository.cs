@@ -41,7 +41,7 @@ namespace R26_DailyQueueWinForm.Data
                 using (SqlCommand cmd = new SqlCommand("GetAllR26DailyQueue", con))
                 {
                     cmd.CommandType = CommandType.StoredProcedure;
-                    cmd.CommandTimeout = 120; // Increase timeout for large datasets
+                    cmd.CommandTimeout = 240; // Increase timeout for large datasets
 
                     con.Open();
 

@@ -28,9 +28,11 @@ namespace R26_DailyQueueWinForm
         private BindingSource _bindingSource;
         private EmailConfiguration _emailConfig;
         public bool _isExiting = false;
+        private bool _suppressSuccessMessage = false;
 
         // Reference to Sam's Delivery Report form
         private SamsDeliveryReportForm _samsDeliveryForm;
+        private RpaScheduleQueueDetailForm _rpaScheduleForm;
 
         // Filter controls
         private Label lblCompanyFilter;
@@ -224,18 +226,14 @@ namespace R26_DailyQueueWinForm
             this.menuItemReports.Text = "Sam's Delivery Report Status";
             this.menuItemReports.Click += MenuItemReports_Click;
 
-            var menuItemSample1 = new ToolStripMenuItem("Sample 1");
-            menuItemSample1.Click += MenuItemSample1_Click;
-
-            var menuItemSample2 = new ToolStripMenuItem("Sample 2");
-            menuItemSample2.Click += MenuItemSample2_Click;
+            // NEW: menuItemProduction
+            var menuItemProduction = new ToolStripMenuItem("Production");
+            menuItemProduction.Click += MenuItemProduction_Click;
 
             // Add submenu items to main menu
             menuItemMain.DropDownItems.Add(this.menuItemR26);
             menuItemMain.DropDownItems.Add(this.menuItemReports);
-            menuItemMain.DropDownItems.Add(new ToolStripSeparator());
-            menuItemMain.DropDownItems.Add(menuItemSample1);
-            menuItemMain.DropDownItems.Add(menuItemSample2);
+            menuItemMain.DropDownItems.Add(menuItemProduction);
 
             this.mainMenuStrip.Items.Add(menuItemMain);
 
@@ -831,11 +829,18 @@ namespace R26_DailyQueueWinForm
 
                 int displayedRecordCount = _bindingSource.Count;
 
-                string messageText = isInitialLoad
-                    ? $"Loaded {displayedRecordCount:N0} records successfully!"
-                    : $"Refreshed {displayedRecordCount:N0} records successfully!";
+                // Show message unless explicitly suppressed
+                if (!_suppressSuccessMessage)
+                {
+                    string messageText = isInitialLoad
+                        ? $"Loaded {displayedRecordCount:N0} records successfully!"
+                        : $"Refreshed {displayedRecordCount:N0} records successfully!";
 
-                MessageBox.Show(messageText, "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(messageText, "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
+                // Reset the flag after load completes
+                _suppressSuccessMessage = false;
             }
             catch (Exception ex)
             {
@@ -897,23 +902,66 @@ namespace R26_DailyQueueWinForm
             cmbCompanyFilter.EndUpdate();
         }
 
-        private void MenuItemSample1_Click(object sender, EventArgs e)
+        private void MenuItemProduction_Click(object sender, EventArgs e)
         {
-            MessageBox.Show(
-                "Sample 1 menu item clicked!\n\nYou can implement your custom functionality here.",
-                "Sample 1",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            // Set flag to suppress message when hiding (not when returning)
+            _suppressSuccessMessage = true;
+
+            // ✅ ALWAYS check Application.OpenForms FIRST
+            var existingRpaForm = Application.OpenForms.OfType<RpaScheduleQueueDetailForm>()
+                .FirstOrDefault();
+
+            if (existingRpaForm != null && !existingRpaForm.IsDisposed)
+            {
+                // ✅ Update references in existing form
+                existingRpaForm.SetR26QueueForm(this);
+                if (_samsDeliveryForm != null && !_samsDeliveryForm.IsDisposed)
+                {
+                    existingRpaForm.SetSamsDeliveryForm(_samsDeliveryForm);
+                }
+                existingRpaForm.Show();
+                existingRpaForm.BringToFront();
+                this.Hide();
+                return;
+            }
+
+            // ✅ Check stored reference only if not found in OpenForms
+            if (_rpaScheduleForm != null && !_rpaScheduleForm.IsDisposed)
+            {
+                _rpaScheduleForm.SetR26QueueForm(this);
+                if (_samsDeliveryForm != null && !_samsDeliveryForm.IsDisposed)
+                {
+                    _rpaScheduleForm.SetSamsDeliveryForm(_samsDeliveryForm);
+                }
+                _rpaScheduleForm.Show();
+                _rpaScheduleForm.BringToFront();
+                this.Hide();
+                return;
+            }
+
+            // ✅ Only create NEW form if none exists
+            _rpaScheduleForm = new RpaScheduleQueueDetailForm(
+                _emailConfig,
+                this,
+                _samsDeliveryForm
+            );
+
+            _rpaScheduleForm.FormClosed += (s, args) =>
+            {
+                _rpaScheduleForm = null;
+                if (!this.IsDisposed && !_isExiting)
+                {
+                    // DO NOT suppress - user is coming back to R26, show message
+                    _suppressSuccessMessage = false;
+                    this.Show();
+                    this.BringToFront();
+                }
+            };
+
+            _rpaScheduleForm.Show();
+            this.Hide();
         }
 
-        private void MenuItemSample2_Click(object sender, EventArgs e)
-        {
-            MessageBox.Show(
-                "Sample 2 menu item clicked!\n\nYou can implement your custom functionality here.",
-                "Sample 2",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-        }
         private void ShowLoadingIndicator(bool show)
         {
             Panel loadingPanel = this.Controls.Find("loadingPanel", false).FirstOrDefault() as Panel;
@@ -1953,29 +2001,28 @@ namespace R26_DailyQueueWinForm
 
         private void R26QueueForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            // Prevent re-entry
+            // ✅ If already exiting, just return (prevents duplicate dialogs)
             if (_isExiting)
             {
                 return;
             }
 
-            // If this is triggered by Application.Exit() from another form, don't show confirmation
+            // ✅ If closed by Application.Exit() from another form, don't show dialog
             if (e.CloseReason == CloseReason.ApplicationExitCall)
             {
                 return;
             }
 
-            // Check if user is closing the form (not just hiding it)
+            // Only show confirmation if user clicked the X button
             if (e.CloseReason == CloseReason.UserClosing)
             {
-                // Set flag to prevent re-entry
+                // Set flag immediately to prevent re-entry
                 _isExiting = true;
 
-                // Count pending changes
+                // Count unsaved changes
                 int individualChangesCount = _individualStatusChanges?.Count ?? 0;
-
-                // Count selected rows (bulk update pending)
                 int selectedRowsCount = 0;
+
                 if (dgvQueue?.Rows != null)
                 {
                     selectedRowsCount = dgvQueue.Rows
@@ -1985,7 +2032,8 @@ namespace R26_DailyQueueWinForm
 
                 int totalPendingChanges = individualChangesCount + selectedRowsCount;
 
-                // If there are pending changes, show warning message
+                DialogResult result;
+
                 if (totalPendingChanges > 0)
                 {
                     string message = "You have unsaved changes:\n\n";
@@ -2002,64 +2050,52 @@ namespace R26_DailyQueueWinForm
 
                     message += "\nAre you sure you want to exit without saving these changes?";
 
-                    var result = MessageBox.Show(
+                    result = MessageBox.Show(
                         message,
                         "Unsaved Changes - Confirm Exit",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Warning);
-
-                    if (result == DialogResult.Yes)
-                    {
-                        // Close Sam's Delivery form if it exists
-                        if (_samsDeliveryForm != null && !_samsDeliveryForm.IsDisposed)
-                        {
-                            _samsDeliveryForm.Close();
-                        }
-
-                        // Exit the entire application
-                        Application.Exit();
-                    }
-                    else
-                    {
-                        // Reset flag if user cancels
-                        _isExiting = false;
-                        // Cancel the close operation
-                        e.Cancel = true;
-                    }
                 }
                 else
                 {
-                    // No pending changes, show normal exit confirmation
-                    var result = MessageBox.Show(
+                    result = MessageBox.Show(
                         "Are you sure you want to exit the application?",
                         "Confirm Exit",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Question);
+                }
 
-                    if (result == DialogResult.Yes)
+                if (result == DialogResult.Yes)
+                {
+                    // ✅ Set _isExiting flag on other forms BEFORE closing them
+                    if (_samsDeliveryForm != null && !_samsDeliveryForm.IsDisposed)
                     {
-                        // Close Sam's Delivery form if it exists
-                        if (_samsDeliveryForm != null && !_samsDeliveryForm.IsDisposed)
-                        {
-                            _samsDeliveryForm.Close();
-                        }
+                        _samsDeliveryForm._isExiting = true;
+                        _samsDeliveryForm.Close();
+                    }
 
-                        // Exit the entire application
-                        Application.Exit();
-                    }
-                    else
+                    if (_rpaScheduleForm != null && !_rpaScheduleForm.IsDisposed)
                     {
-                        // Reset flag if user cancels
-                        _isExiting = false;
-                        // Cancel the close operation
-                        e.Cancel = true;
+                        _rpaScheduleForm._isExiting = true;
+                        _rpaScheduleForm.Close();
                     }
+
+                    // Exit the entire application
+                    Application.Exit();
+                }
+                else
+                {
+                    // User clicked No - reset flag and cancel close
+                    _isExiting = false;
+                    e.Cancel = true;
                 }
             }
         }
-
         private void MenuItemReports_Click(object sender, EventArgs e)
         {
+            // Set flag to suppress message when hiding (not when returning)
+            _suppressSuccessMessage = true;
+
             // Check if Sam's Delivery form already exists and is not disposed
             if (_samsDeliveryForm != null && !_samsDeliveryForm.IsDisposed)
             {
@@ -2091,6 +2127,8 @@ namespace R26_DailyQueueWinForm
                     // Only try to show this form if it hasn't been disposed
                     if (!this.IsDisposed && !_isExiting)
                     {
+                        // DO NOT suppress - user is coming back to R26, show message
+                        _suppressSuccessMessage = false;
                         this.Show();
                         this.BringToFront();
                     }
@@ -2104,6 +2142,8 @@ namespace R26_DailyQueueWinForm
         // Method to be called from HtmlViewerForm to show this form
         public void ShowR26Form()
         {
+            // DO NOT suppress - user is coming to R26 form, show message
+            _suppressSuccessMessage = false;
             this.Show();
             this.BringToFront();
             this.Focus();

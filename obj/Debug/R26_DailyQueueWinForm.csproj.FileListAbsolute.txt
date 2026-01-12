@@ -43,8 +43,12 @@ D:\Repos\SpEmployee\R26_DailyQueueWinForm\obj\Debug\R26_Dail.4D7FE3E8.Up2Date
 D:\Repos\SpEmployee\R26_DailyQueueWinForm\obj\Debug\R26_DailyQueueWinForm.exe
 D:\Repos\SpEmployee\R26_DailyQueueWinForm\obj\Debug\R26_DailyQueueWinForm.pdb
 D:\Repos\SpEmployee\R26_DailyQueueWinForm\bin\Debug\R26_DailyQueueWinForm.pdb
-D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\Test 1.html
+D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.csproj.AssemblyReference.cache
+D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.Properties.Resources.resources
+D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.csproj.GenerateResource.cache
+D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.csproj.CoreCompileInputs.cache
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\appsettings.json
+D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\Test 1.html
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\R26_DailyQueueWinForm.exe
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\R26_DailyQueueWinForm.pdb
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\Microsoft.Bcl.AsyncInterfaces.dll
@@ -81,10 +85,6 @@ D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\System.
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\System.Text.Encodings.Web.xml
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\System.Text.Json.xml
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\bin\Debug\System.Threading.Tasks.Extensions.xml
-D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.csproj.AssemblyReference.cache
-D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.Properties.Resources.resources
-D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.csproj.GenerateResource.cache
-D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.csproj.CoreCompileInputs.cache
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_Dail.4D7FE3E8.Up2Date
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.exe
 D:\Repos\Itech\R26DailyQueueManagement\R26DailyQueueManagement\obj\Debug\R26_DailyQueueWinForm.pdb

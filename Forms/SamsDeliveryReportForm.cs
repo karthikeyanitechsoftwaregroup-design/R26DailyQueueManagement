@@ -10,13 +10,25 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Text;
 
 namespace R26_DailyQueueWinForm.Forms
 {
     [ComVisible(true)]
     public partial class SamsDeliveryReportForm : Form
     {
-        private WebBrowser webBrowser;
+        [DllImport("user32.dll")]
+        private static extern int SendMessage(IntPtr hWnd, int wMsg, int wParam, int lParam);
+
+        private const int WM_SETREDRAW = 0x000B;
+        private const int WM_VSCROLL = 0x0115;
+        private const int SB_LINEDOWN = 1;
+        private const int SB_LINEUP = 0;
+        private DataGridView dgvDeliveryStatus;
+        private DataGridView dgvOneDriveLinks;
+        private Label lblDeliveryStatusTitle;
+        private Label lblOneDriveLinksTitle;
         private MenuStrip mainMenuStrip;
         private ToolStripMenuItem menuItemMain;
         private ToolStripMenuItem menuItemR26Queue;
@@ -27,23 +39,34 @@ namespace R26_DailyQueueWinForm.Forms
         private Label lblCountTotal;
         private Label lblCountCompleted;
         private Label lblCountPending;
+        private ComboBox cmbFilterReportName;
+        private ComboBox cmbFilterCompanyName;
+        private Label lblFilterReportName;
+        private Label lblFilterCompanyName;
+        private Label lblFilterOneDriveLink;
+        private ComboBox cmbFilterOneDriveLink;
+        private string _lastSortedColumn = "";
+        private bool _lastSortAscending = true;
 
         private DateTime _targetDate;
         private EmailConfiguration _emailConfig;
         private string _connectionString;
         private string _storedProcedureName;
+        private DataTable _originalDeliveryStatusTable;
+        private DataTable _originalOneDriveLinksTable;
+        private DataTable _filteredOneDriveLinksTable;
         private string _cachedHtmlContent;
         private string _currentSortOrder = "none";
         private System.Windows.Forms.Timer _countUpdateTimer;
 
         private R26QueueForm _r26Form;
         private R26QueueForm _r26QueueForm;
+        private RpaScheduleQueueDetailForm _rpaScheduleQueueDetailForm;
 
         private SamsDeliveryDatabaseService _databaseService;
         private SamsDeliveryEmailService _emailService;
 
-        // NEW: Flag to prevent re-entry into exit confirmation
-        private bool _isExiting = false;
+        public bool _isExiting = false;
 
         public SamsDeliveryReportForm(
             DateTime targetDate,
@@ -64,7 +87,7 @@ namespace R26_DailyQueueWinForm.Forms
 
             _countUpdateTimer = new System.Windows.Forms.Timer();
             _countUpdateTimer.Interval = 2000;
-            //_countUpdateTimer.Tick += CountUpdateTimer_Tick;
+            _countUpdateTimer.Tick += CountUpdateTimer_Tick;
 
             InitializeComponent();
             LoadReportFromDatabase();
@@ -102,17 +125,12 @@ namespace R26_DailyQueueWinForm.Forms
                 Checked = true
             };
 
-            var menuItemSample1 = new ToolStripMenuItem("Sample 1");
-            menuItemSample1.Click += MenuItemSample1_Click;
-
-            var menuItemSample2 = new ToolStripMenuItem("Sample 2");
-            menuItemSample2.Click += MenuItemSample2_Click;
+            var menuItemProduction = new ToolStripMenuItem("Production");
+            menuItemProduction.Click += MenuItemProduction_Click;
 
             menuItemMain.DropDownItems.Add(menuItemR26Queue);
             menuItemMain.DropDownItems.Add(menuItemDeliveryReport);
-            menuItemMain.DropDownItems.Add(new ToolStripSeparator()); 
-            menuItemMain.DropDownItems.Add(menuItemSample1);
-            menuItemMain.DropDownItems.Add(menuItemSample2);
+            menuItemMain.DropDownItems.Add(menuItemProduction);
 
             mainMenuStrip.Items.Add(menuItemMain);
             this.MainMenuStrip = mainMenuStrip;
@@ -150,7 +168,7 @@ namespace R26_DailyQueueWinForm.Forms
                 Font = new Font("Segoe UI", 11F, FontStyle.Bold),
                 ForeColor = Color.Green,
                 Location = new Point(100, 5),
-                Text = "Completed: 0"
+                Text = "| Completed: 0"
             };
 
             lblCountPending = new Label
@@ -159,7 +177,7 @@ namespace R26_DailyQueueWinForm.Forms
                 Font = new Font("Segoe UI", 11F, FontStyle.Bold),
                 ForeColor = Color.Red,
                 Location = new Point(250, 5),
-                Text = "Pending: 0"
+                Text = "| Pending: 0"
             };
 
             pnlOneDriveCounts.Controls.Add(lblCountTotal);
@@ -194,28 +212,194 @@ namespace R26_DailyQueueWinForm.Forms
             btnSendEmail.FlatAppearance.BorderSize = 0;
             btnSendEmail.Click += BtnSendEmail_Click;
 
-            webBrowser = new WebBrowser
+            // Delivery Status Table Title
+            lblDeliveryStatusTitle = new Label
             {
-                Location = new Point(0, 85),
-                Size = new Size(this.ClientSize.Width, this.ClientSize.Height - 85),
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                ScriptErrorsSuppressed = true
+                Text = $"Delivery Status - {_targetDate:dd MMM yyyy}",
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                Location = new Point(20, 90),
+                AutoSize = true,
+                BackColor = Color.LightGray,
+                Padding = new Padding(5)
             };
 
-            webBrowser.DocumentCompleted += WebBrowser_DocumentCompleted;
-            webBrowser.ObjectForScripting = this;
+            // Delivery Status DataGridView
+            dgvDeliveryStatus = new DataGridView
+            {
+                Location = new Point(20, 130),
+                Size = new Size(this.ClientSize.Width - 40, 142),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                AutoGenerateColumns = false,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                MultiSelect = false,
+                RowHeadersVisible = false,
+                BackgroundColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                EnableHeadersVisualStyles = false,
+                AllowUserToResizeRows = false,
+                RowTemplate = { Height = 20 },
+                ColumnHeadersHeight = 40
+            };
+
+            dgvDeliveryStatus.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(30, 58, 85);
+            dgvDeliveryStatus.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(30, 58, 85);
+            dgvDeliveryStatus.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
+            dgvDeliveryStatus.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            dgvDeliveryStatus.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            dgvDeliveryStatus.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.True;
+
+            dgvDeliveryStatus.DefaultCellStyle.Font = new Font("Segoe UI", 8F);
+            dgvDeliveryStatus.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 120, 212);
+            dgvDeliveryStatus.DefaultCellStyle.SelectionForeColor = Color.White;
+            dgvDeliveryStatus.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240);
+
+            EnableSmoothScrolling(dgvDeliveryStatus);
+
+            // OneDrive Links Table Title
+            lblOneDriveLinksTitle = new Label
+            {
+                Text = $"OneDrive Links For Processed Files - {_targetDate:dd MMM yyyy}",
+                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+                Location = new Point(20, 280),
+                AutoSize = true,
+                BackColor = Color.LightGray,
+                Padding = new Padding(5),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+            };
+
+            // Filter labels and comboboxes
+            lblFilterReportName = new Label
+            {
+                Text = "Report Name:",
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Location = new Point(20, 323),
+                AutoSize = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+            };
+
+            cmbFilterReportName = new ComboBox
+            {
+                Font = new Font("Segoe UI", 9F),
+                Location = new Point(110, 320),
+                Size = new Size(470, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+            };
+            cmbFilterReportName.SelectedIndexChanged += FilterComboBox_SelectedIndexChanged;
+
+            lblFilterCompanyName = new Label
+            {
+                Text = "Company Name:",
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Location = new Point(600, 323),
+                AutoSize = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+            };
+
+            cmbFilterCompanyName = new ComboBox
+            {
+                Font = new Font("Segoe UI", 9F),
+                Location = new Point(705, 320),
+                Size = new Size(200, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+            };
+            cmbFilterCompanyName.SelectedIndexChanged += FilterComboBox_SelectedIndexChanged;
+
+            lblFilterOneDriveLink = new Label
+            {
+                Text = "OneDrive Status:",
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Location = new Point(925, 323),
+                AutoSize = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+            };
+
+            cmbFilterOneDriveLink = new ComboBox
+            {
+                Font = new Font("Segoe UI", 9F),
+                Location = new Point(1035, 320),
+                Size = new Size(150, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
+            };
+            cmbFilterOneDriveLink.SelectedIndexChanged += FilterComboBox_SelectedIndexChanged;
+
+
+            // OneDrive Links DataGridView
+            dgvOneDriveLinks = new DataGridView
+            {
+                Location = new Point(20, 350),
+                Size = new Size(this.ClientSize.Width - 150, this.ClientSize.Height - 361),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                AutoGenerateColumns = false,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                MultiSelect = false,
+                RowHeadersVisible = false,
+                BackgroundColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                EnableHeadersVisualStyles = false,
+                AllowUserToResizeRows = false,
+                RowTemplate = { Height = 30 },
+                ColumnHeadersHeight = 40
+            };
+
+            dgvOneDriveLinks.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(30, 58, 85);
+            dgvOneDriveLinks.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
+            dgvOneDriveLinks.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            dgvOneDriveLinks.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            dgvOneDriveLinks.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(30, 58, 85);
+
+            dgvOneDriveLinks.DefaultCellStyle.Font = new Font("Segoe UI", 9F);
+            dgvOneDriveLinks.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 120, 212);
+            dgvOneDriveLinks.DefaultCellStyle.SelectionForeColor = Color.White;
+            dgvOneDriveLinks.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240);
+
+            dgvOneDriveLinks.CellContentClick += DgvOneDriveLinks_CellContentClick;
+            dgvOneDriveLinks.ColumnHeaderMouseClick += DgvOneDriveLinks_ColumnHeaderMouseClick;
+            dgvOneDriveLinks.CellFormatting += DgvOneDriveLinks_CellFormatting;
+
+            EnableSmoothScrolling(dgvOneDriveLinks);
 
             this.Controls.Add(mainMenuStrip);
             this.Controls.Add(lblTitle);
             this.Controls.Add(pnlOneDriveCounts);
             this.Controls.Add(btnRefresh);
             this.Controls.Add(btnSendEmail);
-            this.Controls.Add(webBrowser);
+            this.Controls.Add(lblDeliveryStatusTitle);
+            this.Controls.Add(dgvDeliveryStatus);
+            this.Controls.Add(lblOneDriveLinksTitle);
+            this.Controls.Add(lblFilterReportName);
+            this.Controls.Add(cmbFilterReportName);
+            this.Controls.Add(lblFilterCompanyName);
+            this.Controls.Add(cmbFilterCompanyName);
+            this.Controls.Add(lblFilterOneDriveLink);
+            this.Controls.Add(cmbFilterOneDriveLink);
+            this.Controls.Add(dgvOneDriveLinks);
 
             pnlOneDriveCounts.BringToFront();
 
             this.Resize += (s, e) => PositionButtons();
             this.Shown += (s, e) => PositionButtons();
+        }
+
+        private void DgvOneDriveLinks_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
+        {
+            if (dgvOneDriveLinks.Columns[e.ColumnIndex].Name == "OneDriveLink" && e.RowIndex >= 0)
+            {
+                var cellValue = e.Value?.ToString();
+                if (!string.IsNullOrEmpty(cellValue) && cellValue.StartsWith("http"))
+                {
+                    e.Value = "📂";
+                    e.FormattingApplied = true;
+                }
+            }
         }
 
         private void PositionButtons()
@@ -233,182 +417,307 @@ namespace R26_DailyQueueWinForm.Forms
             }
         }
 
-        //private void CountUpdateTimer_Tick(object sender, EventArgs e)
-        //{
-        //    if (webBrowser.Document != null && webBrowser.ReadyState == WebBrowserReadyState.Complete)
-        //    {
-        //        UpdateOneDriveLinkCounts();
-        //    }
-        //}
-
-        private void WebBrowser_DocumentCompleted(object sender, WebBrowserDocumentCompletedEventArgs e)
+        private void CountUpdateTimer_Tick(object sender, EventArgs e)
         {
-            if (webBrowser.Document != null)
-            {
-                UpdateOneDriveLinkCounts();
-                _countUpdateTimer.Start();
-
-                try
-                {
-                    HtmlElementCollection tables = webBrowser.Document.GetElementsByTagName("table");
-
-                    foreach (HtmlElement table in tables)
-                    {
-                        HtmlElementCollection headers = table.GetElementsByTagName("th");
-                        foreach (HtmlElement header in headers)
-                        {
-                            if (header.InnerText != null && header.InnerText.Trim().Contains("OneDrive Link"))
-                            {
-                                header.Style = "cursor: pointer; user-select: none;";
-                                header.Click -= OneDriveLinkHeader_Click;
-                                header.Click += OneDriveLinkHeader_Click;
-                                break;
-                            }
-                        }
-                    }
-                }
-                catch (Exception)
-                {
-                    // Silently handle errors
-                }
-            }
+            UpdateOneDriveLinkCounts();
         }
 
-
-        private void OneDriveLinkHeader_Click(object sender, HtmlElementEventArgs e)
+        private void DgvOneDriveLinks_ColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
         {
-            SortOneDriveLinks();
-        }
-
-        public void OneDriveLinkHeaderClicked()
-        {
-            SortOneDriveLinks();
-        }
-
-        private void SortOneDriveLinks()
-        {
-            if (webBrowser.Document == null) return;
+            if (_filteredOneDriveLinksTable == null || _filteredOneDriveLinksTable.Rows.Count == 0) return;
 
             try
             {
-                // Toggle between original order and sorted (no-links first)
-                if (_currentSortOrder == "none")
-                    _currentSortOrder = "sorted"; // No-links first
+                string columnName = dgvOneDriveLinks.Columns[e.ColumnIndex].Name;
+                bool ascending = true;
+
+                // Determine sort direction
+                if (_lastSortedColumn == columnName)
+                {
+                    ascending = !_lastSortAscending;
+                }
+
+                _lastSortedColumn = columnName;
+                _lastSortAscending = ascending;
+
+                // Sort the data
+                if (columnName == "OneDriveLink")
+                {
+                    // Special sorting for OneDrive Link column
+                    var sortedRows = _filteredOneDriveLinksTable.AsEnumerable()
+                        .OrderBy(row => {
+                            string link = row["OneDrive Link"]?.ToString() ?? "";
+                            bool hasLink = !string.IsNullOrEmpty(link) && link != "-" &&
+                                         (link.Contains("http") || link.Contains("📂"));
+
+                            if (ascending)
+                                return hasLink ? 0 : 1;
+                            else
+                                return hasLink ? 1 : 0;
+                        })
+                        .ThenBy(row => row["Company Name"]?.ToString() ?? "")
+                        .ThenBy(row => row["Report Name"]?.ToString() ?? "")
+                        .ToList();
+
+                    DataTable sortedTable = _filteredOneDriveLinksTable.Clone();
+                    foreach (var row in sortedRows)
+                    {
+                        sortedTable.ImportRow(row);
+                    }
+
+                    dgvOneDriveLinks.DataSource = sortedTable;
+                    _filteredOneDriveLinksTable = sortedTable;
+                }
                 else
-                    _currentSortOrder = "none"; // Original order (links already first from SP)
-
-                HtmlElementCollection tables = webBrowser.Document.GetElementsByTagName("table");
-                HtmlElement targetTable = null;
-
-                foreach (HtmlElement table in tables)
                 {
-                    HtmlElementCollection headers = table.GetElementsByTagName("th");
-                    foreach (HtmlElement header in headers)
-                    {
-                        if (header.InnerText != null && header.InnerText.Contains("OneDrive Link"))
-                        {
-                            targetTable = table;
-                            break;
-                        }
-                    }
-                    if (targetTable != null) break;
+                    // Standard sorting for other columns
+                    string sortColumn = dgvOneDriveLinks.Columns[e.ColumnIndex].DataPropertyName;
+                    DataView dv = _filteredOneDriveLinksTable.DefaultView;
+                    dv.Sort = $"[{sortColumn}] {(ascending ? "ASC" : "DESC")}";
+
+                    _filteredOneDriveLinksTable = dv.ToTable();
+                    dgvOneDriveLinks.DataSource = _filteredOneDriveLinksTable;
                 }
 
-                if (targetTable == null) return;
-
-                HtmlElementCollection tbody = targetTable.GetElementsByTagName("tbody");
-                if (tbody.Count == 0) return;
-
-                HtmlElement tableBody = tbody[0];
-                HtmlElementCollection rows = tableBody.GetElementsByTagName("tr");
-
-                if (rows.Count <= 1) return;
-
-                var rowDataList = new System.Collections.Generic.List<RowData>();
-
-                foreach (HtmlElement row in rows)
+                // Update column header to show sort direction
+                foreach (DataGridViewColumn col in dgvOneDriveLinks.Columns)
                 {
-                    HtmlElementCollection cells = row.GetElementsByTagName("td");
-                    if (cells.Count >= 4)
-                    {
-                        string oneDriveLinkHtml = cells[3].InnerHtml ?? "";
-                        bool hasLink = oneDriveLinkHtml.Contains("<a") || oneDriveLinkHtml.Contains("📂");
-
-                        rowDataList.Add(new RowData
-                        {
-                            RowHtml = row.OuterHtml,
-                            HasLink = hasLink
-                        });
-                    }
+                    col.HeaderText = col.DataPropertyName.Replace("OneDriveLink", "OneDrive Link");
                 }
 
-                // Sort only when in "sorted" mode - rows WITHOUT links appear first
-                if (_currentSortOrder == "sorted")
-                {
-                    rowDataList = rowDataList.OrderBy(r => r.HasLink).ToList(); // false (no link) comes first
-                }
-                // When _currentSortOrder is "none", keep original order (links already first from SP)
+                dgvOneDriveLinks.Columns[e.ColumnIndex].HeaderText =
+                    dgvOneDriveLinks.Columns[e.ColumnIndex].DataPropertyName.Replace("OneDriveLink", "OneDrive Link") +
+                    (ascending ? " ▲" : " ▼");
 
-                // ✅ FIX: Reorder rows without losing any data
-                // This rebuilds the table with ALL existing rows, just in a different order
-                string newTableBodyHtml = "";
-                foreach (var rowData in rowDataList)
-                {
-                    newTableBodyHtml += rowData.RowHtml; // Keeps ALL row data intact
-                }
-
-                tableBody.InnerHtml = newTableBodyHtml; // Replace with reordered rows
-
-                // Update header with sort indicator
-                HtmlElementCollection tableHeaders = targetTable.GetElementsByTagName("th");
-                foreach (HtmlElement header in tableHeaders)
-                {
-                    if (header.InnerText != null && header.InnerText.Contains("OneDrive Link"))
-                    {
-                        // No indicator needed - user can see the order change
-                        string headerText = "OneDrive Link";
-                        header.InnerText = headerText;
-                    }
-                }
-
-                // ✅ Re-attach click handlers after sorting (they get lost when InnerHtml is replaced)
-                HtmlElementCollection newRows = tableBody.GetElementsByTagName("tr");
-                foreach (HtmlElement row in newRows)
-                {
-                    HtmlElementCollection cells = row.GetElementsByTagName("td");
-                    if (cells.Count >= 4)
-                    {
-                        // Optional: You can add click handlers to cells here if needed
-                    }
-                }
+                UpdateOneDriveLinkCounts();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error sorting OneDrive links: {ex.Message}",
+                MessageBox.Show($"Error sorting column: {ex.Message}",
                     "Sort Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
-        private void MenuItemSample1_Click(object sender, EventArgs e)
+        private void DgvOneDriveLinks_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            MessageBox.Show(
-                "Sample 1 menu item clicked!\n\nYou can implement your custom functionality here.",
-                "Sample 1",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            if (e.RowIndex >= 0 && e.ColumnIndex >= 0)
+            {
+                if (dgvOneDriveLinks.Columns[e.ColumnIndex].Name == "OneDriveLink")
+                {
+                    var cellValue = dgvOneDriveLinks.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString();
+                    if (!string.IsNullOrEmpty(cellValue) && cellValue.StartsWith("http"))
+                    {
+                        try
+                        {
+                            System.Diagnostics.Process.Start(cellValue);
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"Failed to open link: {ex.Message}", "Error",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                    }
+                }
+            }
         }
 
-        private void MenuItemSample2_Click(object sender, EventArgs e)
+        private void FilterComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
-            MessageBox.Show(
-                "Sample 2 menu item clicked!\n\nYou can implement your custom functionality here.",
-                "Sample 2",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            ApplyFilters();
         }
+
+        private void PopulateFilterDropdowns()
+        {
+            if (_originalOneDriveLinksTable == null) return;
+
+            try
+            {
+                // Store current selections
+                string currentReportName = cmbFilterReportName.SelectedItem?.ToString();
+                string currentCompanyName = cmbFilterCompanyName.SelectedItem?.ToString();
+
+                // Populate Report Name dropdown
+                cmbFilterReportName.Items.Clear();
+                cmbFilterReportName.Items.Add("-- All Reports --");
+
+                var reportNames = _originalOneDriveLinksTable.AsEnumerable()
+                    .Select(row => row["Report Name"]?.ToString())
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct()
+                    .OrderBy(name => name)
+                    .ToList();
+
+                foreach (var name in reportNames)
+                {
+                    cmbFilterReportName.Items.Add(name);
+                }
+
+                // Populate Company Name dropdown
+                cmbFilterCompanyName.Items.Clear();
+                cmbFilterCompanyName.Items.Add("-- All Companies --");
+
+                var companyNames = _originalOneDriveLinksTable.AsEnumerable()
+                    .Select(row => row["Company Name"]?.ToString())
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct()
+                    .OrderBy(name => name)
+                    .ToList();
+
+                foreach (var name in companyNames)
+                {
+                    cmbFilterCompanyName.Items.Add(name);
+                }
+
+                // Restore previous selections or set to "All"
+                if (!string.IsNullOrEmpty(currentReportName) && cmbFilterReportName.Items.Contains(currentReportName))
+                {
+                    cmbFilterReportName.SelectedItem = currentReportName;
+                }
+                else
+                {
+                    cmbFilterReportName.SelectedIndex = 0;
+                }
+
+                if (!string.IsNullOrEmpty(currentCompanyName) && cmbFilterCompanyName.Items.Contains(currentCompanyName))
+                {
+                    cmbFilterCompanyName.SelectedItem = currentCompanyName;
+                }
+                else
+                {
+                    cmbFilterCompanyName.SelectedIndex = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error populating dropdowns: {ex.Message}");
+            }
+
+            // Populate OneDrive Link Status dropdown
+            cmbFilterOneDriveLink.Items.Clear();
+            cmbFilterOneDriveLink.Items.Add("-- All Status --");
+            cmbFilterOneDriveLink.Items.Add("Completed");
+            cmbFilterOneDriveLink.Items.Add("Pending");
+
+            string currentOneDriveFilter = cmbFilterOneDriveLink.SelectedItem?.ToString();
+            if (!string.IsNullOrEmpty(currentOneDriveFilter) && cmbFilterOneDriveLink.Items.Contains(currentOneDriveFilter))
+            {
+                cmbFilterOneDriveLink.SelectedItem = currentOneDriveFilter;
+            }
+            else
+            {
+                cmbFilterOneDriveLink.SelectedIndex = 0;
+            }
+        }
+
+        private void ApplyFilters()
+        {
+            if (_originalOneDriveLinksTable == null) return;
+
+            try
+            {
+                string reportNameFilter = cmbFilterReportName.SelectedItem?.ToString();
+                string companyNameFilter = cmbFilterCompanyName.SelectedItem?.ToString();
+                string oneDriveLinkFilter = cmbFilterOneDriveLink.SelectedItem?.ToString();
+
+                DataView dv = _originalOneDriveLinksTable.DefaultView;
+                List<string> filters = new List<string>();
+
+                if (!string.IsNullOrEmpty(reportNameFilter) &&
+                    reportNameFilter != "-- All Reports --")
+                {
+                    filters.Add($"[Report Name] = '{reportNameFilter.Replace("'", "''")}'");
+                }
+
+                if (!string.IsNullOrEmpty(companyNameFilter) &&
+                    companyNameFilter != "-- All Companies --")
+                {
+                    filters.Add($"[Company Name] = '{companyNameFilter.Replace("'", "''")}'");
+                }
+
+                dv.RowFilter = filters.Count > 0 ? string.Join(" AND ", filters) : "";
+
+                _filteredOneDriveLinksTable = dv.ToTable();
+
+                // Apply OneDrive Link filter (after converting to DataTable because we need custom logic)
+                if (!string.IsNullOrEmpty(oneDriveLinkFilter) && oneDriveLinkFilter != "-- All Status --")
+                {
+                    DataTable tempTable = _filteredOneDriveLinksTable.Clone();
+
+                    foreach (DataRow row in _filteredOneDriveLinksTable.Rows)
+                    {
+                        string oneDriveLink = row["OneDrive Link"]?.ToString() ?? "";
+                        bool hasLink = !string.IsNullOrEmpty(oneDriveLink) && oneDriveLink != "-" &&
+                                      (oneDriveLink.Contains("http") || oneDriveLink.Contains("📂"));
+
+                        if ((oneDriveLinkFilter == "Completed" && hasLink) ||
+                            (oneDriveLinkFilter == "Pending" && !hasLink))
+                        {
+                            tempTable.ImportRow(row);
+                        }
+                    }
+
+                    _filteredOneDriveLinksTable = tempTable;
+                }
+
+                dgvOneDriveLinks.DataSource = _filteredOneDriveLinksTable;
+
+                UpdateOneDriveLinkCounts();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error applying filters: {ex.Message}", "Filter Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private void MenuItemProduction_Click(object sender, EventArgs e)
+        {
+            var existingRpaForm = Application.OpenForms.OfType<RpaScheduleQueueDetailForm>()
+                .FirstOrDefault();
+
+            if (existingRpaForm != null && !existingRpaForm.IsDisposed)
+            {
+                existingRpaForm.SetR26QueueForm(_r26QueueForm);
+                existingRpaForm.SetSamsDeliveryForm(this);
+                existingRpaForm.Show();
+                existingRpaForm.BringToFront();
+                this.Hide();
+                return;
+            }
+
+            if (_rpaScheduleQueueDetailForm != null && !_rpaScheduleQueueDetailForm.IsDisposed)
+            {
+                _rpaScheduleQueueDetailForm.SetR26QueueForm(_r26QueueForm);
+                _rpaScheduleQueueDetailForm.SetSamsDeliveryForm(this);
+                _rpaScheduleQueueDetailForm.Show();
+                _rpaScheduleQueueDetailForm.BringToFront();
+                this.Hide();
+                return;
+            }
+
+            _rpaScheduleQueueDetailForm = new RpaScheduleQueueDetailForm(
+                _emailConfig,
+                _r26QueueForm,
+                this
+            );
+
+            _rpaScheduleQueueDetailForm.FormClosed += (s, args) =>
+            {
+                _rpaScheduleQueueDetailForm = null;
+                if (!this.IsDisposed && !_isExiting)
+                {
+                    this.Show();
+                    this.BringToFront();
+                }
+            };
+
+            _rpaScheduleQueueDetailForm.Show();
+            this.Hide();
+        }
+
         private void UpdateOneDriveLinkCounts()
         {
-            if (webBrowser.Document == null)
+            if (_filteredOneDriveLinksTable == null || _filteredOneDriveLinksTable.Rows.Count == 0)
             {
                 pnlOneDriveCounts.Visible = false;
                 return;
@@ -416,98 +725,39 @@ namespace R26_DailyQueueWinForm.Forms
 
             try
             {
-                int totalCount = 0;
+                int totalCount = _filteredOneDriveLinksTable.Rows.Count;
                 int completedCount = 0;
                 int pendingCount = 0;
 
-                HtmlElementCollection tables = webBrowser.Document.GetElementsByTagName("table");
-                HtmlElement targetTable = null;
-                int oneDriveLinkColumnIndex = -1;
-
-                foreach (HtmlElement table in tables)
+                foreach (DataRow row in _filteredOneDriveLinksTable.Rows)
                 {
-                    HtmlElementCollection tableHeaders = table.GetElementsByTagName("th");
-                    for (int i = 0; i < tableHeaders.Count; i++)
+                    string oneDriveLink = row["OneDrive Link"]?.ToString() ?? "";
+
+                    bool hasLink = !string.IsNullOrEmpty(oneDriveLink) && oneDriveLink != "-" &&
+                                  (oneDriveLink.Contains("http") || oneDriveLink.Contains("📂"));
+
+                    if (hasLink)
                     {
-                        HtmlElement header = tableHeaders[i];
-                        if (header.InnerText != null && header.InnerText.Contains("OneDrive Link"))
-                        {
-                            targetTable = table;
-                            oneDriveLinkColumnIndex = i;
-                            break;
-                        }
+                        completedCount++;
                     }
-                    if (targetTable != null) break;
-                }
-
-                if (targetTable != null && oneDriveLinkColumnIndex >= 0)
-                {
-                    HtmlElementCollection tbody = targetTable.GetElementsByTagName("tbody");
-                    if (tbody.Count > 0)
+                    else
                     {
-                        HtmlElementCollection rows = tbody[0].GetElementsByTagName("tr");
-
-                        foreach (HtmlElement row in rows)
-                        {
-                            HtmlElementCollection cells = row.GetElementsByTagName("td");
-
-                            if (cells.Count == 0)
-                                continue;
-
-                            totalCount++;
-
-                            if (cells.Count > oneDriveLinkColumnIndex)
-                            {
-                                HtmlElement cell = cells[oneDriveLinkColumnIndex];
-                                string cellContent = cell.InnerHtml ?? "";
-                                string cellText = cell.InnerText ?? "";
-
-                                bool hasLink = cellContent.Contains("href=") ||
-                                              cellContent.Contains("<a ") ||
-                                              cellContent.Contains("<a>") ||
-                                              cellContent.Contains("📂") ||
-                                              (cellText.Contains("📂"));
-
-                                if (hasLink)
-                                {
-                                    completedCount++;
-                                }
-                                else if (cellText.Trim() == "-" || string.IsNullOrWhiteSpace(cellText))
-                                {
-                                    pendingCount++;
-                                }
-                                else
-                                {
-                                    if (!string.IsNullOrWhiteSpace(cellText) && cellText.Trim() != "-")
-                                    {
-                                        completedCount++;
-                                    }
-                                    else
-                                    {
-                                        pendingCount++;
-                                    }
-                                }
-                            }
-                        }
+                        pendingCount++;
                     }
-
-                    lblCountTotal.Text = $"Total: {totalCount}";
-                    lblCountCompleted.Text = $"| Completed: {completedCount}";
-                    lblCountPending.Text = $"| Pending: {pendingCount}";
-
-                    lblCountTotal.Location = new Point(5, 5);
-                    lblCountCompleted.Location = new Point(lblCountTotal.Right + 10, 5);
-                    lblCountPending.Location = new Point(lblCountCompleted.Right + 10, 5);
-
-                    pnlOneDriveCounts.Size = new Size(lblCountPending.Right + 10, 30);
-
-                    pnlOneDriveCounts.Visible = true;
-                    pnlOneDriveCounts.BringToFront();
                 }
-                else
-                {
-                    pnlOneDriveCounts.Visible = false;
-                }
+
+                lblCountTotal.Text = $"Total: {totalCount}";
+                lblCountCompleted.Text = $"| Completed: {completedCount}";
+                lblCountPending.Text = $"| Pending: {pendingCount}";
+
+                lblCountTotal.Location = new Point(5, 5);
+                lblCountCompleted.Location = new Point(lblCountTotal.Right + 10, 5);
+                lblCountPending.Location = new Point(lblCountCompleted.Right + 10, 5);
+
+                pnlOneDriveCounts.Size = new Size(lblCountPending.Right + 10, 30);
+
+                pnlOneDriveCounts.Visible = true;
+                pnlOneDriveCounts.BringToFront();
             }
             catch (Exception ex)
             {
@@ -520,16 +770,8 @@ namespace R26_DailyQueueWinForm.Forms
         {
             try
             {
-                webBrowser.DocumentText = @"
-                    <html>
-                        <body style='font-family: Segoe UI, Arial, sans-serif;'>
-                            <div style='text-align:center; margin-top: 100px;'>
-                                <h2 style='color:#0078D4;'>Loading Sam's Delivery Report...</h2>
-                                <p style='color:#666;'>Please wait while we fetch the data from the database.</p>
-                            </div>
-                        </body>
-                    </html>";
-
+                dgvDeliveryStatus.DataSource = null;
+                dgvOneDriveLinks.DataSource = null;
                 btnSendEmail.Enabled = false;
                 btnRefresh.Enabled = false;
 
@@ -537,40 +779,43 @@ namespace R26_DailyQueueWinForm.Forms
 
                 if (!string.IsNullOrWhiteSpace(_cachedHtmlContent))
                 {
-                    webBrowser.DocumentText = _cachedHtmlContent;
+                    var tables = ParseHtmlToDataTables(_cachedHtmlContent);
+
+                    if (tables.Count >= 1)
+                    {
+                        _originalDeliveryStatusTable = tables[0];
+                        SetupDeliveryStatusGrid();
+                        dgvDeliveryStatus.DataSource = _originalDeliveryStatusTable;
+                    }
+
+                    if (tables.Count >= 2)
+                    {
+                        _originalOneDriveLinksTable = tables[1];
+                        _filteredOneDriveLinksTable = _originalOneDriveLinksTable.Copy();
+                        SetupOneDriveLinksGrid();
+                        dgvOneDriveLinks.DataSource = _filteredOneDriveLinksTable;
+
+                        // Populate filter dropdowns
+                        PopulateFilterDropdowns();
+
+                        UpdateOneDriveLinkCounts();
+                        _countUpdateTimer.Start();
+                    }
+
                     btnSendEmail.Enabled = true;
                 }
                 else
                 {
-                    webBrowser.DocumentText = @"
-                        <html>
-                            <body style='font-family: Segoe UI, Arial, sans-serif;'>
-                                <div style='text-align:center; margin-top: 100px;'>
-                                    <h2 style='color: #FF8C00;'>No Data Available</h2>
-                                    <p style='color:#666;'>The stored procedure returned no data for the selected date.</p>
-                                    <p style='color:#999; font-size: 14px;'>Date: " + _targetDate.ToString("MMMM dd, yyyy") + @"</p>
-                                </div>
-                            </body>
-                        </html>";
+                    MessageBox.Show(
+                        $"The stored procedure returned no data for the selected date.\n\nDate: {_targetDate:MMMM dd, yyyy}",
+                        "No Data Available",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
                     btnSendEmail.Enabled = false;
                 }
             }
             catch (Exception ex)
             {
-                webBrowser.DocumentText = $@"
-                    <html>
-                        <body style='font-family: Segoe UI, Arial, sans-serif;'>
-                            <div style='text-align:center; margin-top: 100px;'>
-                                <h2 style='color: #DC3545;'>Error Loading Report</h2>
-                                <p style='color:#666;'>Failed to load report from database.</p>
-                                <div style='background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 15px; margin: 20px auto; max-width: 600px; text-align: left;'>
-                                    <strong>Error Details:</strong><br/>
-                                    {ex.Message}
-                                </div>
-                            </div>
-                        </body>
-                    </html>";
-
                 MessageBox.Show(
                     $"Error loading report from database:\n\n{ex.Message}",
                     "Database Error",
@@ -582,6 +827,262 @@ namespace R26_DailyQueueWinForm.Forms
             finally
             {
                 btnRefresh.Enabled = true;
+            }
+        }
+
+        private List<DataTable> ParseHtmlToDataTables(string html)
+        {
+            List<DataTable> tables = new List<DataTable>();
+
+            try
+            {
+                var tableMatches = Regex.Matches(html, @"<table[^>]*>(.*?)</table>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                foreach (Match tableMatch in tableMatches)
+                {
+                    DataTable dt = new DataTable();
+                    string tableContent = tableMatch.Groups[1].Value;
+
+                    // Extract headers
+                    var headerMatches = Regex.Matches(tableContent, @"<th[^>]*>(.*?)</th>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                    foreach (Match header in headerMatches)
+                    {
+                        string headerText = Regex.Replace(header.Groups[1].Value, @"<[^>]+>", "").Trim();
+                        headerText = System.Net.WebUtility.HtmlDecode(headerText);
+
+                        if (string.IsNullOrWhiteSpace(headerText))
+                        {
+                            headerText = $"Column{dt.Columns.Count + 1}";
+                        }
+
+                        string uniqueColumnName = headerText;
+                        int counter = 1;
+                        while (dt.Columns.Contains(uniqueColumnName))
+                        {
+                            uniqueColumnName = $"{headerText}{counter}";
+                            counter++;
+                        }
+
+                        dt.Columns.Add(uniqueColumnName);
+                    }
+
+                    // Extract body
+                    var bodyMatch = Regex.Match(tableContent, @"<tbody[^>]*>(.*?)</tbody>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                    string bodyContent = bodyMatch.Success ? bodyMatch.Groups[1].Value : tableContent;
+
+                    var rowMatches = Regex.Matches(bodyContent, @"<tr[^>]*>(.*?)</tr>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                    foreach (Match rowMatch in rowMatches)
+                    {
+                        string rowContent = rowMatch.Groups[1].Value;
+
+                        if (rowContent.Contains("<th")) continue;
+
+                        var cellMatches = Regex.Matches(rowContent, @"<td[^>]*>(.*?)</td>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                        if (cellMatches.Count > 0 && cellMatches.Count <= dt.Columns.Count)
+                        {
+                            DataRow dr = dt.NewRow();
+
+                            for (int i = 0; i < cellMatches.Count; i++)
+                            {
+                                string cellContent = cellMatches[i].Groups[1].Value;
+
+                                var linkMatch = Regex.Match(cellContent, @"href=['""]([^'""]+)['""]", RegexOptions.IgnoreCase);
+                                if (linkMatch.Success)
+                                {
+                                    dr[i] = linkMatch.Groups[1].Value;
+                                }
+                                else
+                                {
+                                    string cellText = Regex.Replace(cellContent, @"<[^>]+>", "").Trim();
+                                    cellText = System.Net.WebUtility.HtmlDecode(cellText);
+                                    cellText = cellText.Replace("&nbsp;", " ").Trim();
+                                    dr[i] = string.IsNullOrWhiteSpace(cellText) ? "" : cellText;
+                                }
+                            }
+
+                            dt.Rows.Add(dr);
+                        }
+                    }
+
+                    if (dt.Columns.Count > 0)
+                    {
+                        tables.Add(dt);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Error parsing HTML: {ex.Message}", ex);
+            }
+
+            return tables;
+        }
+
+        private void EnableSmoothScrolling(DataGridView dgv)
+        {
+            if (dgv == null) return;
+
+            try
+            {
+                // Enable double buffering to reduce flicker
+                typeof(DataGridView).InvokeMember("DoubleBuffered",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.SetProperty,
+                    null, dgv, new object[] { true });
+
+                // Attach mouse wheel event for smooth scrolling
+                dgv.MouseWheel += Dgv_MouseWheel;
+            }
+            catch
+            {
+                // If smooth scrolling setup fails, continue with default behavior
+            }
+        }
+
+private void Dgv_MouseWheel(object sender, MouseEventArgs e)
+{
+    try
+    {
+        DataGridView grid = sender as DataGridView;
+        if (grid == null || grid.RowCount == 0) return;
+
+        // Don't interfere if no rows to scroll
+        if (grid.Rows.Count == 0)
+        {
+            return;
+        }
+
+        int currentIndex = grid.FirstDisplayedScrollingRowIndex;
+        if (currentIndex < 0) return;
+
+        int scrollLines = SystemInformation.MouseWheelScrollLines;
+        int scrollAmount = Math.Max(1, scrollLines / 3);
+
+        int newIndex = currentIndex;
+
+        if (e.Delta > 0) // Scroll up
+        {
+            newIndex = Math.Max(0, currentIndex - scrollAmount);
+        }
+        else // Scroll down
+        {
+            int maxIndex = Math.Max(0, grid.RowCount - 1);
+            newIndex = Math.Min(maxIndex, currentIndex + scrollAmount);
+        }
+
+        // Only set if valid and different
+        if (newIndex >= 0 && newIndex < grid.RowCount && newIndex != currentIndex)
+        {
+            grid.FirstDisplayedScrollingRowIndex = newIndex;
+        }
+
+        // Mark the event as handled
+        ((HandledMouseEventArgs)e).Handled = true;
+    }
+    catch
+    {
+        // Silently ignore scroll errors
+    }
+}
+        private void SetupDeliveryStatusGrid()
+        {
+            dgvDeliveryStatus.Columns.Clear();
+            dgvDeliveryStatus.AutoGenerateColumns = false;
+
+            foreach (DataColumn col in _originalDeliveryStatusTable.Columns)
+            {
+                DataGridViewTextBoxColumn textColumn = new DataGridViewTextBoxColumn
+                {
+                    DataPropertyName = col.ColumnName,
+                    Name = col.ColumnName,
+                    HeaderText = col.ColumnName,
+                    AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells
+                };
+
+                if (col.ColumnName == "No")
+                {
+                    textColumn.Width = 50;
+                    textColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                }
+                else if (col.ColumnName == "Code")
+                {
+                    textColumn.Width = 60;
+                    textColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                }
+                else if (col.ColumnName == "Frequency")
+                {
+                    textColumn.Width = 100;
+                    textColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                }
+                else if (col.ColumnName == "Report Name")
+                {
+                    textColumn.Width = 400;
+                    textColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+                }
+                else
+                {
+                    textColumn.Width = 120;
+                    textColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                }
+
+                dgvDeliveryStatus.Columns.Add(textColumn);
+            }
+        }
+
+        private void SetupOneDriveLinksGrid()
+        {
+            dgvOneDriveLinks.Columns.Clear();
+            dgvOneDriveLinks.AutoGenerateColumns = false;
+
+            foreach (DataColumn col in _originalOneDriveLinksTable.Columns)
+            {
+                if (col.ColumnName == "OneDrive Link")
+                {
+                    DataGridViewLinkColumn linkColumn = new DataGridViewLinkColumn
+                    {
+                        DataPropertyName = col.ColumnName,
+                        Name = "OneDriveLink",
+                        HeaderText = "OneDrive Link",
+                        Width = 250,
+                        SortMode = DataGridViewColumnSortMode.Programmatic,
+                        LinkBehavior = LinkBehavior.HoverUnderline,
+                        LinkColor = Color.Black,
+                        ActiveLinkColor = Color.FromArgb(0, 100, 180),
+                        VisitedLinkColor = Color.FromArgb(0, 120, 212),
+                        DefaultCellStyle = { Alignment = DataGridViewContentAlignment.MiddleCenter }
+                    };
+                    dgvOneDriveLinks.Columns.Add(linkColumn);
+                }
+                else
+                {
+                    DataGridViewTextBoxColumn textColumn = new DataGridViewTextBoxColumn
+                    {
+                        DataPropertyName = col.ColumnName,
+                        Name = col.ColumnName,
+                        HeaderText = col.ColumnName,
+                        SortMode = DataGridViewColumnSortMode.NotSortable,
+                        AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells
+                    };
+
+                    if (col.ColumnName == "No")
+                    {
+                        textColumn.Width = 50;
+                        textColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+                    }
+                    else if (col.ColumnName == "Company Name")
+                    {
+                        textColumn.Width = 150;
+                    }
+                    else if (col.ColumnName == "Report Name")
+                    {
+                        textColumn.Width = 250;
+                        textColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+                    }
+
+                    dgvOneDriveLinks.Columns.Add(textColumn);
+                }
             }
         }
 
@@ -599,7 +1100,7 @@ namespace R26_DailyQueueWinForm.Forms
                 if (string.IsNullOrWhiteSpace(_cachedHtmlContent))
                 {
                     MessageBox.Show(
-                        "No HTML content available to send.\n\nPlease ensure the report is loaded successfully before sending.",
+                        "No data available to send.\n\nPlease ensure the report is loaded successfully before sending.",
                         "No Content",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
@@ -664,32 +1165,26 @@ namespace R26_DailyQueueWinForm.Forms
 
         private void SamsDeliveryReportForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            // ✅ Stop and dispose timer
             if (_countUpdateTimer != null)
             {
                 _countUpdateTimer.Stop();
                 _countUpdateTimer.Dispose();
             }
 
-            // ✅ Check if already exiting to prevent re-entry
             if (_isExiting)
             {
                 return;
             }
 
-            // ✅ If this is triggered by Application.Exit() from another form, don't show confirmation
             if (e.CloseReason == CloseReason.ApplicationExitCall)
             {
                 return;
             }
 
-            // Only handle user closing (X button)
             if (e.CloseReason == CloseReason.UserClosing)
             {
-                // ✅ Set flag BEFORE showing dialog to prevent re-entry
                 _isExiting = true;
 
-                // Always show exit confirmation when user clicks close button
                 var result = MessageBox.Show(
                     "Are you sure you want to exit the application?",
                     "Confirm Exit",
@@ -698,53 +1193,85 @@ namespace R26_DailyQueueWinForm.Forms
 
                 if (result == DialogResult.Yes)
                 {
-                    // Close R26 form if it exists (without triggering their events)
                     if (_r26Form != null && !_r26Form.IsDisposed)
                     {
-                        // ✅ Set their exit flag to prevent their dialog
                         _r26Form._isExiting = true;
                         _r26Form.Close();
                     }
 
                     if (_r26QueueForm != null && !_r26QueueForm.IsDisposed && _r26QueueForm != _r26Form)
                     {
-                        // ✅ Set their exit flag to prevent their dialog
                         _r26QueueForm._isExiting = true;
                         _r26QueueForm.Close();
                     }
 
-                    // Exit the entire application
+                    if (_rpaScheduleQueueDetailForm != null && !_rpaScheduleQueueDetailForm.IsDisposed)
+                    {
+                        _rpaScheduleQueueDetailForm._isExiting = true;
+                        _rpaScheduleQueueDetailForm.Close();
+                    }
+
                     Application.Exit();
                 }
                 else
                 {
-                    // ✅ Reset flag if user cancels
                     _isExiting = false;
-                    // Cancel the close operation
                     e.Cancel = true;
                 }
             }
         }
 
+        public void SetR26QueueForm(R26QueueForm r26Form)
+        {
+            _r26QueueForm = r26Form;
+            _r26Form = r26Form;
+        }
+
+        public void SetRpaScheduleQueueDetailForm(RpaScheduleQueueDetailForm rpaForm)
+        {
+            _rpaScheduleQueueDetailForm = rpaForm;
+        }
+
         private void MenuItemR26Queue_Click(object sender, EventArgs e)
         {
+            var existingR26Form = Application.OpenForms.OfType<R26QueueForm>()
+                .FirstOrDefault();
+
+            if (existingR26Form != null && !existingR26Form.IsDisposed)
+            {
+                existingR26Form.SetSamsDeliveryForm(this);
+                existingR26Form.Show();
+                existingR26Form.BringToFront();
+                this.Hide();
+                return;
+            }
+
             if (_r26QueueForm != null && !_r26QueueForm.IsDisposed)
             {
-                _r26QueueForm.ShowR26Form();
+                _r26QueueForm.SetSamsDeliveryForm(this);
+                _r26QueueForm.Show();
+                _r26QueueForm.BringToFront();
                 this.Hide();
+                return;
             }
-            else
+
+            _r26QueueForm = new R26QueueForm(_emailConfig);
+            _r26Form = _r26QueueForm;
+            _r26QueueForm.SetSamsDeliveryForm(this);
+
+            _r26QueueForm.FormClosed += (s, args) =>
             {
-                _r26QueueForm = new R26QueueForm(_emailConfig);
-                _r26QueueForm.FormClosed += (s, args) =>
+                _r26QueueForm = null;
+                _r26Form = null;
+                if (!this.IsDisposed && !_isExiting)
                 {
-                    _r26QueueForm = null;
                     this.Show();
                     this.BringToFront();
-                };
-                _r26QueueForm.Show();
-                this.Hide();
-            }
+                }
+            };
+
+            _r26QueueForm.Show();
+            this.Hide();
         }
 
         public void ShowSamsDeliveryForm()
@@ -752,12 +1279,6 @@ namespace R26_DailyQueueWinForm.Forms
             this.Show();
             this.BringToFront();
             this.Focus();
-        }
-
-        private class RowData
-        {
-            public string RowHtml { get; set; }
-            public bool HasLink { get; set; }
         }
     }
 
